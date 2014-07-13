@@ -146,6 +146,9 @@ type NotificationHandlers struct {
 	// made to register for the notification and the function is non-nil.
 	OnTxAcceptedVerbose func(txDetails *btcjson.TxRawResult)
 
+    // OnTxDoubleSpent is invoked when a new transaction spends the same outpoint as a transaction already in the mempool. The hash of the tx in the mempool will be passed in as mempoolTxHash, and the hash of the other tx as incomingTxHash. If the incoming tx is in a block, isInBlock will be true.
+    OnTxDoubleSpent func(mempoolTxHash *btcwire.ShaHash, incomingTxHash *btcwire.ShaHash, isInBlock bool)
+
 	// OnBtcdConnected is invoked when a wallet connects or disconnects from
 	// btcd.
 	//
@@ -320,6 +323,20 @@ func (c *Client) handleNotification(ntfn *rawNotification) {
 		}
 
 		c.ntfnHandlers.OnTxAcceptedVerbose(rawTx)
+
+    // OnTxDoubleSpent
+    case btcws.TxDoubleSpentNtfnMethod:
+        // Ignore the notification if the client is not interested in it.
+        if c.ntfnHandlers.OnTxDoubleSpent == nil {
+            return
+        }
+
+        mempoolTxHash, incomingTxHash, isInBlock, err := parseTxDoubleSpentNtfnParams(ntfn.Params)
+        if err != nil {
+            log.Warnf("Received invalid tx double spent notification: %v", err)
+        }
+
+        c.ntfnHandlers.OnTxDoubleSpent(mempoolTxHash, incomingTxHash, isInBlock)
 
 	// OnBtcdConnected
 	case btcws.BtcdConnectedNtfnMethod:
@@ -540,6 +557,40 @@ func parseTxAcceptedVerboseNtfnParams(params []json.RawMessage) (*btcjson.TxRawR
 	// types for all details about the transaction (i.e. decoding hashes
 	// from their string encoding).
 	return &rawTx, nil
+}
+
+func parseTxDoubleSpentNtfnParams(params []json.RawMessage) (mempoolTxHash *btcwire.ShaHash , incomingTxHash *btcwire.ShaHash, isInBlock bool, err error) {
+	if len(params) != 3 {
+        err = wrongNumParams(len(params))
+        return
+	}
+
+    var mempoolTxHashStr string
+    err = json.Unmarshal(params[0], &mempoolTxHashStr)
+    if err != nil {
+        return
+    }
+    mempoolTxHash, err = btcwire.NewShaHashFromStr(mempoolTxHashStr)
+    if err != nil {
+        return
+    }
+
+    var incomingTxHashStr string
+    err = json.Unmarshal(params[1], &incomingTxHashStr)
+    if err != nil {
+        return
+    }
+    incomingTxHash, err = btcwire.NewShaHashFromStr(incomingTxHashStr)
+    if err != nil {
+        return
+    }
+
+    err = json.Unmarshal(params[2], &isInBlock)
+    if err != nil {
+        return
+    }
+
+    return
 }
 
 // parseBtcdConnectedNtfnParams parses out the connection status of btcd
